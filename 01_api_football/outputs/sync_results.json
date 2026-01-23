@@ -1,0 +1,29 @@
+{
+  "mode": "daily",
+  "pending": {
+    "updated": 1,
+    "failed": 0
+  },
+  "upcoming": {
+    "inserted": 82,
+    "failed": 0
+  },
+  "odds_automatic": {
+    "finished_updated": 0,
+    "upcoming_updated": 0,
+    "dates_processed": 12,
+    "dates_total": 12
+  },
+  "stats": {
+    "fixtures_inserted": 82,
+    "fixtures_updated": 1,
+    "fixtures_failed": 0,
+    "odds_fetched": 0,
+    "requests_used": 18
+  },
+  "rate_limiter": {
+    "requests_today": 18,
+    "remaining_daily": 88,
+    "daily_limit": 100
+  }
+}

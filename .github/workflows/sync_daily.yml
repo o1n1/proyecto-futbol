@@ -1,0 +1,67 @@
+# Sincronización diaria de datos de fútbol
+# API-Football → Supabase
+
+name: Daily Sync
+
+on:
+  schedule:
+    # Ejecutar a las 4:00 UTC diariamente (antes de calculate_features a las 6:00)
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    # Permitir ejecución manual con opciones
+    inputs:
+      dry_run:
+        description: 'Ejecutar en modo DRY RUN (sin escribir en BD)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas requests numpy urllib3
+
+      - name: Run daily sync
+        env:
+          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: python sync_daily.py
+
+      - name: Upload sync results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sync-results
+          path: sync_results.json
+          retention-days: 7
+
+      - name: Create summary
+        if: always()
+        run: |
+          echo "### Sync Daily Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f sync_results.json ]; then
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat sync_results.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No results file generated" >> $GITHUB_STEP_SUMMARY
+          fi

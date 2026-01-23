@@ -1,0 +1,12 @@
+{
+  "bankroll_inicial": 1000,
+  "bankroll_final": 1485.9,
+  "roi_total": 48.59,
+  "total_dias": 45,
+  "total_apuestas": 152,
+  "total_ganadas": 106,
+  "total_perdidas": 46,
+  "win_rate": 69.74,
+  "max_drawdown": 10.0,
+  "sharpe_ratio": 4.53
+}

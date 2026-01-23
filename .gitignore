@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# ============================================
+# DATOS GRANDES (no incluir en git)
+# ============================================
+
+# SofaScore - Base de datos SQLite (~270MB)
+02_sofascore/data/sofascore.db
+
+# SofaScore - JSONs crudos (~500MB+)
+02_sofascore/data/raw/
+02_sofascore/data/details/
+
+# Football-Data.co.uk - CSVs
+03_football_data_uk/data/*.csv
+
+# API-Football - Excel inicial
+01_api_football/data/full_database_export.xlsx
+
+# ============================================
+# OUTPUTS (regenerables)
+# ============================================
+
+# Modelos entrenados (se pueden regenerar)
+# 01_api_football/models/*.pkl
+# 01_api_football/models/*.json
+
+# Predicciones y simulaciones
+# 01_api_football/outputs/*.xlsx
+# 01_api_football/outputs/*.json
+
+# ============================================
+# ARCHIVOS SENSIBLES
+# ============================================
+
+# Variables de entorno
+.env
+.env.local
+*.env
+
+# Credenciales
+credentials.json
+secrets.json
+
+# ============================================
+# CHECKPOINTS (estado del scraping)
+# ============================================
+02_sofascore/data/checkpoint.json
