@@ -4,7 +4,7 @@
 Sistema de análisis y predicción de partidos de fútbol con múltiples fuentes de datos. El proyecto contiene:
 - **API-Football (Supabase)**: 112K+ partidos con features ML y modelos entrenados
 - **SofaScore (SQLite)**: 392K+ eventos con cuotas de todas las ligas del mundo
-- **Football-Data.co.uk (CSV)**: Cuotas históricas de Pinnacle y Bet365
+- **Hybrid DB (SQLite)**: Base de datos local que combina features de API-Football + cuotas de SofaScore
 
 Este problema pertenece a un sistema formal determinista.
 No aceptes correcciones sin verificación lógica.
@@ -57,14 +57,18 @@ proyecto/
 │   ├── models/                         # (futuro)
 │   └── outputs/                        # (futuro)
 │
-├── 03_football_data_uk/                # BD Terciaria (CSV)
+├── 03_hybrid_db/                       # BD Híbrida (API-Football + SofaScore)
 │   ├── README.md
 │   ├── scripts/
-│   │   └── 01_download_data.py
+│   │   ├── 01_export_api_football.py   # Exportar Supabase → SQLite
+│   │   ├── 02_match_events.py          # Matching API ↔ SofaScore
+│   │   ├── 03_merge_odds.py            # Unir cuotas de SofaScore
+│   │   ├── 04_prepare_training_data.py # Preparar datos para ML
+│   │   └── 05_train_hybrid_model.py    # Entrenar modelo híbrido
 │   ├── data/
-│   │   └── *.csv                       # CSVs por liga/temporada
-│   ├── models/                         # (futuro)
-│   └── outputs/                        # (futuro)
+│   │   └── hybrid.db                   # SQLite con datos combinados
+│   ├── models/                         # Modelos híbridos entrenados
+│   └── outputs/                        # Resultados
 │
 └── .github/
     └── workflows/
@@ -79,7 +83,7 @@ proyecto/
 | `01_`, `02_` | Orden de ejecución de scripts |
 | `01_api_football/` | Módulo de BD API-Football |
 | `02_sofascore/` | Módulo de BD SofaScore |
-| `03_football_data_uk/` | Módulo de BD Football-Data |
+| `03_hybrid_db/` | Módulo de BD Híbrida (API + SofaScore) |
 
 ## Bases de Datos Disponibles
 
@@ -87,7 +91,7 @@ proyecto/
 |--------|--------|----------------|---------|---------|
 | 01_api_football | api-football.com | Supabase | 112,164 | 2020-2026 |
 | 02_sofascore | sofascore.com | SQLite | 392,686 | 2019-2026 |
-| 03_football_data_uk | football-data.co.uk | CSV | ~15,000 | 2019-2025 |
+| 03_hybrid_db | API + SofaScore | SQLite local | ~80-90K | 2020-2026 |
 
 ## Base de Datos - Supabase
 
@@ -1201,3 +1205,80 @@ df = pd.read_sql("""
 - Over/Under 2.5
 - Asian handicap
 - Corners
+
+---
+
+## Base de Datos Híbrida (Enero 2026)
+
+### Descripción
+Base de datos SQLite local que combina:
+- **Features de API-Football**: 112K partidos con 152 features calculadas
+- **Cuotas de SofaScore**: 2.3M filas de cuotas históricas
+
+### Ubicación
+```
+03_hybrid_db/data/hybrid.db
+```
+
+### Scripts Disponibles
+
+| Script | Descripción |
+|--------|-------------|
+| `01_export_api_football.py` | Exporta fixtures y features de Supabase a SQLite |
+| `02_match_events.py` | Matching fuzzy entre API-Football ↔ SofaScore |
+| `03_merge_odds.py` | Une cuotas de SofaScore a los fixtures |
+| `04_prepare_training_data.py` | Crea tabla `training_data` lista para ML |
+| `05_train_hybrid_model.py` | Entrena modelos XGBoost/LightGBM |
+
+### Orden de Ejecución
+
+```bash
+# 1. Exportar de Supabase (requiere sofascore.db copiada)
+python 03_hybrid_db/scripts/01_export_api_football.py
+
+# 2. Matching entre fuentes
+python 03_hybrid_db/scripts/02_match_events.py
+
+# 3. Merge de cuotas
+python 03_hybrid_db/scripts/03_merge_odds.py
+
+# 4. Preparar datos de entrenamiento
+python 03_hybrid_db/scripts/04_prepare_training_data.py
+
+# 5. Entrenar modelo híbrido
+python 03_hybrid_db/scripts/05_train_hybrid_model.py
+```
+
+### Esquema de Base de Datos
+
+```sql
+-- Datos de API-Football
+api_fixtures (fixture_id, date, league_name, home_team_name, away_team_name, ...)
+api_features (fixture_id, 152 columnas de features)
+
+-- Mapping entre fuentes
+event_mapping (fixture_id, event_id, match_score, match_method)
+
+-- Cuotas de SofaScore
+hybrid_odds (fixture_id, odds_home_open/close, odds_draw_open/close, odds_away_open/close, ...)
+
+-- Dataset final para ML
+training_data (todas las columnas combinadas + features derivadas de cuotas)
+```
+
+### Features de Cuotas Agregadas
+
+| Feature | Descripción |
+|---------|-------------|
+| `implied_prob_home` | 1 / odds_home_close |
+| `implied_prob_draw` | 1 / odds_draw_close |
+| `implied_prob_away` | 1 / odds_away_close |
+| `odds_movement_home` | odds_close - odds_open (movimiento de línea) |
+| `odds_movement_draw` | Movimiento de cuota de empate |
+| `odds_movement_away` | Movimiento de cuota visitante |
+
+### Requisitos
+
+1. **sofascore.db**: Debe estar en `02_sofascore/data/sofascore.db`
+2. **Conexión a Supabase**: Para exportar fixtures y features
+3. **Librerías**: pandas, numpy, scikit-learn, xgboost, lightgbm
