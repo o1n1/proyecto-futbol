@@ -5,7 +5,12 @@
       "mcp__plugin_supabase_supabase__search_docs",
       "Bash(pip show:*)",
       "Bash(dir:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: Proyecto de predicción de fútbol\n\n- 01_api_football: BD Supabase + modelos ML entrenados\n- 02_sofascore: Scraper de cuotas históricas \\(392K eventos\\)\n- 03_football_data_uk: Descarga de CSVs de Football-Data.co.uk\n- GitHub Actions para sync diario y cálculo de features\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(gh --version:*)",
+      "Bash(git remote:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)"
     ]
   }
 }
