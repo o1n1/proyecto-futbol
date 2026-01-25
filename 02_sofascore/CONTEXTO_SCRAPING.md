@@ -7,10 +7,28 @@
 - IP actual: `136.226.1.115`
 - Bloqueo afecta tanto requests directos como Playwright
 
+### Progreso actual
+- **Eventos completados**: 23,144 de ~395,000 (5.9%)
+- **Eventos fallidos**: 0
+- **Datos guardados en**: `02_sofascore/data/raw_details/`
+
 ### Lo que ya tenemos
 - **sofascore.db**: 392,686 eventos con cuotas 1X2 (2019-2026)
 - **Script funcional**: `02_scrape_full_details.py` listo para obtener datos completos
 - **Datos faltantes**: BTTS, Over/Under, estadísticas, alineaciones, incidentes
+
+## Archivos a copiar a otra PC
+
+**IMPORTANTE**: Para continuar el scraping en otra PC, copiar estos archivos:
+
+```
+02_sofascore/data/
+├── sofascore.db              # ~200 MB - Base de datos con lista de eventos
+├── checkpoint_details.json   # ~2 MB - Progreso (23K eventos ya hechos)
+└── raw_details/              # Variable - JSONs ya descargados (opcional)
+```
+
+Sin estos archivos, el script empezará desde cero y repetirá trabajo.
 
 ## Qué hacer cuando se desbloquee
 
