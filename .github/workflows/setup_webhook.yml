@@ -1,0 +1,20 @@
+name: Setup Telegram Webhook
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Register webhook
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          WEBHOOK_URL="https://sofascore-proxy.hetorlalo.workers.dev/webhook"
+          echo "Setting webhook to: $WEBHOOK_URL"
+          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${WEBHOOK_URL}"
+          echo ""
+          echo "Verifying..."
+          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
