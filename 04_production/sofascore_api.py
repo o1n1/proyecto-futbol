@@ -34,13 +34,16 @@ def _request(endpoint, retries=3):
             resp = requests.get(url, headers=SOFASCORE_HEADERS, timeout=30, verify=False)
             if resp.status_code == 200:
                 return resp.json()
+            print(f"[API] {url} -> status {resp.status_code}")
             if resp.status_code == 429:
                 time.sleep(60)
                 continue
             if resp.status_code == 404:
                 return None
-        except requests.RequestException:
-            pass
+            # Log response body for debugging
+            print(f"[API] Response: {resp.text[:500]}")
+        except requests.RequestException as e:
+            print(f"[API] {url} -> exception: {e}")
         time.sleep(2 ** attempt)
     return None
 
