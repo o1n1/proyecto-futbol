@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 8 * * *'  # 2:00am Leon GTO (UTC-6)
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'results or stats'
+        required: false
+        default: 'results'
 
 jobs:
   results:
@@ -26,6 +31,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MODE: ${{ inputs.mode || 'results' }}
         run: python 04_production/check_results.py
 
       - name: Commit database

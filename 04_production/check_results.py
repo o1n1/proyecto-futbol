@@ -1,8 +1,10 @@
 """
 Paso 3: Verificar resultados de partidos apostados y actualizar P&L.
 Se ejecuta diario a las 2:00am Leon (08:00 UTC).
+Acepta variable de entorno MODE: 'results' (default) o 'stats' (solo estadisticas).
 """
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -188,8 +190,36 @@ def send_results_message(settled_list, stats):
     send_message(message)
 
 
+def send_stats_message():
+    """Envia solo las estadisticas acumuladas (comando /estado)."""
+    stats = get_accumulated_stats()
+    if stats['total'] == 0:
+        send_message("No hay apuestas registradas aun.")
+        return
+
+    settled = stats['won'] + stats['lost']
+    lines = ["*ESTADISTICAS ACUMULADAS*\n"]
+    lines.append(f"Total apuestas: {stats['total']}")
+    lines.append(f"Resueltas: {settled} ({stats['won']}W / {stats['lost']}L)")
+    if stats['pending'] > 0:
+        lines.append(f"Pendientes: {stats['pending']}")
+    lines.append("")
+    lines.append(f"Win Rate: {stats['win_rate']:.1f}%")
+    lines.append(f"ROI: {stats['roi']:+.1f}%")
+    lines.append(f"P&L total: ${stats['total_pnl']:+,.2f}")
+    lines.append(f"Total apostado: ${stats['total_staked']:,.2f}")
+
+    send_message("\n".join(lines))
+
+
 def main():
-    print("=== CHECK RESULTS ===")
+    mode = os.environ.get('MODE', 'results').lower()
+    print(f"=== CHECK RESULTS (mode={mode}) ===")
+
+    if mode == 'stats':
+        send_stats_message()
+        print("Estadisticas enviadas.")
+        return
 
     predictions = get_pending_predictions()
     if not predictions:
@@ -199,6 +229,8 @@ def main():
             send_message(f"Sin apuestas pendientes.\n"
                          f"Acumulado: {stats['won']}/{stats['won']+stats['lost']} "
                          f"({stats['win_rate']:.1f}% WR) | ROI: {stats['roi']:+.1f}%")
+        else:
+            send_message("No hay apuestas registradas aun.")
         return
 
     print(f"{len(predictions)} predicciones pendientes. Verificando resultados...")
@@ -208,7 +240,6 @@ def main():
     for pred in predictions:
         result = settle_prediction(pred)
         if result:
-            # Agregar info extra para el mensaje
             result['home_team'] = pred['home_team']
             result['away_team'] = pred['away_team']
             result['cup_name'] = pred['cup_name']

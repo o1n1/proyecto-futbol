@@ -1,8 +1,10 @@
 """
 Paso 2: Leer bank del usuario, calcular stakes y enviar apuestas.
 Se ejecuta diario a las 5:00pm Leon (23:00 UTC), 30 min despues de predict_cups.
+Acepta variable de entorno BANK_AMOUNT para recibir bank directamente.
 """
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,13 +141,24 @@ def main():
     matches = get_pending_matches()
     if not matches:
         print("No hay partidos pendientes de enviar.")
+        send_message("No hay partidos pendientes para apostar.")
         return
 
     print(f"{len(matches)} partidos pendientes.")
 
-    # Obtener bank del usuario
-    bank, was_provided = get_user_bank()
-    print(f"Bank: ${bank:,.2f} ({'respondio usuario' if was_provided else 'ultimo registrado'})")
+    # Obtener bank: primero de env (comando /bank), luego de Telegram, luego ultimo registrado
+    bank_env = os.environ.get('BANK_AMOUNT', '').strip()
+    if bank_env:
+        try:
+            bank = float(bank_env)
+            was_provided = True
+            print(f"Bank recibido por comando: ${bank:,.2f}")
+        except ValueError:
+            bank, was_provided = get_user_bank()
+    else:
+        bank, was_provided = get_user_bank()
+
+    print(f"Bank: ${bank:,.2f} ({'proporcionado' if was_provided else 'ultimo registrado'})")
 
     # Calcular stake
     stake = calculate_stakes(bank, len(matches))

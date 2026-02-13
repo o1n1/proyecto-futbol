@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 23 * * *'  # 5:00pm Leon GTO (UTC-6)
   workflow_dispatch:
+    inputs:
+      bank:
+        description: 'Bank amount (e.g. 500)'
+        required: false
+        default: ''
 
 jobs:
   send:
@@ -26,6 +31,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BANK_AMOUNT: ${{ inputs.bank || '' }}
         run: python 04_production/send_bets.py
 
       - name: Commit database

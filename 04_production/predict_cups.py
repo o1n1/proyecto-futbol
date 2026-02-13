@@ -5,6 +5,7 @@ Se ejecuta diario a las 4:30pm Leon (22:30 UTC).
 
 import sqlite3
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -104,19 +105,34 @@ def send_bank_request(matches, target_date):
     print(f"Mensaje enviado a Telegram pidiendo bank.")
 
 
-def main():
-    tomorrow = get_tomorrow_date()
-    print(f"=== PREDICT CUPS - {tomorrow} ===")
+def get_today_date():
+    """Retorna la fecha de hoy en formato YYYY-MM-DD (UTC)."""
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-    matches = find_cup_matches(tomorrow)
+
+def get_target_date():
+    """Determina fecha objetivo desde variable de entorno TARGET_DATE."""
+    target = os.environ.get('TARGET_DATE', 'tomorrow').lower()
+    if target == 'today':
+        return get_today_date()
+    else:
+        return get_tomorrow_date()
+
+
+def main():
+    target_date = get_target_date()
+    label = 'hoy' if os.environ.get('TARGET_DATE', '').lower() == 'today' else 'manana'
+    print(f"=== PREDICT CUPS - {target_date} ({label}) ===")
+
+    matches = find_cup_matches(target_date)
 
     if not matches:
-        send_message(f"Sin apuestas de copa para manana {tomorrow}")
+        send_message(f"Sin apuestas de copa para {label} {target_date}")
         print("No hay partidos. Mensaje enviado.")
         return
 
-    save_pending_matches(matches, tomorrow)
-    send_bank_request(matches, tomorrow)
+    save_pending_matches(matches, target_date)
+    send_bank_request(matches, target_date)
     print(f"Listo. {len(matches)} partidos guardados. Esperando respuesta del usuario.")
 
 

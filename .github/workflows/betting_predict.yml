@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '30 22 * * *'  # 4:30pm Leon GTO (UTC-6)
   workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'today or tomorrow'
+        required: false
+        default: 'tomorrow'
 
 jobs:
   predict:
@@ -22,10 +27,11 @@ jobs:
       - name: Install dependencies
         run: pip install requests curl_cffi
 
-      - name: Predict tomorrow cups
+      - name: Predict cups
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TARGET_DATE: ${{ inputs.target_date || 'tomorrow' }}
         run: python 04_production/predict_cups.py
 
       - name: Commit database
