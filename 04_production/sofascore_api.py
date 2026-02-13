@@ -31,7 +31,7 @@ def _request(endpoint, retries=3):
     url = f"{SOFASCORE_BASE_URL}{endpoint}"
     for attempt in range(retries):
         try:
-            resp = requests.get(url, headers=SOFASCORE_HEADERS, timeout=30, verify=False)
+            resp = requests.get(url, headers=SOFASCORE_HEADERS, timeout=30)
             if resp.status_code == 200:
                 return resp.json()
             print(f"[API] {url} -> status {resp.status_code}")

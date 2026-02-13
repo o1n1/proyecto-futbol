@@ -33,14 +33,10 @@ STAKE_PCT = 0.10        # 10% del bank por apuesta
 MAX_BETS_FOR_PCT = 10   # Si >10 apuestas: dividir bank entre todas
 BANK_DEFAULT = 500      # Bank por defecto si usuario no responde
 
-# SofaScore API
-SOFASCORE_BASE_URL = 'https://api.sofascore.com/api/v1'
+# SofaScore API (via Cloudflare Worker proxy)
+SOFASCORE_BASE_URL = 'https://sofascore-proxy.hetorlalo.workers.dev/api/v1'
 SOFASCORE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'application/json',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://www.sofascore.com/',
-    'Origin': 'https://www.sofascore.com',
 }
 
 # Telegram
