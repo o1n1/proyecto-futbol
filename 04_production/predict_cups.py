@@ -18,35 +18,65 @@ from config import DB_NAME
 
 DB_PATH = Path(__file__).parent / DB_NAME
 
+# Zona horaria de Leon GTO (UTC-6)
+LEON_TZ = timezone(timedelta(hours=-6))
+
 
 def get_tomorrow_date():
-    """Retorna la fecha de manana en formato YYYY-MM-DD (UTC)."""
-    utc_now = datetime.now(timezone.utc)
-    tomorrow = utc_now + timedelta(days=1)
+    """Retorna la fecha de manana en formato YYYY-MM-DD (hora Leon GTO)."""
+    now_leon = datetime.now(LEON_TZ)
+    tomorrow = now_leon + timedelta(days=1)
     return tomorrow.strftime('%Y-%m-%d')
 
 
 def find_cup_matches(target_date):
-    """Busca partidos de copa para la fecha dada y obtiene cuotas Over 2.5."""
-    print(f"Buscando partidos de copa para {target_date}...")
-    events = get_events_by_date(target_date)
+    """Busca partidos de copa para la fecha dada y obtiene cuotas Over 2.5.
 
-    if not events:
+    Consulta la fecha en SofaScore (UTC) y tambien la fecha siguiente,
+    porque partidos nocturnos en Europa (ej: 01:00 UTC del dia siguiente)
+    son del mismo dia en hora Leon (19:00 Leon del dia anterior).
+    """
+    print(f"Buscando partidos de copa para {target_date} (hora Leon)...")
+
+    # Consultar fecha target y dia siguiente en SofaScore (que usa UTC)
+    next_date = (datetime.strptime(target_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
+    events_today = get_events_by_date(target_date) or []
+    events_next = get_events_by_date(next_date) or []
+
+    # Combinar y deduplicar por event_id
+    seen_ids = set()
+    all_events = []
+    for event in events_today + events_next:
+        eid = event.get('event_id')
+        if eid not in seen_ids:
+            seen_ids.add(eid)
+            all_events.append(event)
+
+    if not all_events:
         print("No se encontraron partidos de copa.")
         return []
 
-    # Filtrar solo partidos que no han empezado
-    # SofaScore puede incluir partidos del dia anterior por diferencia de zonas horarias
+    # Filtrar: solo partidos que son de target_date en hora Leon y que no empezaron
     upcoming = []
-    for event in events:
+    for event in all_events:
         status = event.get('status_type', '')
         if status in ('finished', 'inprogress', 'canceled', 'postponed'):
             print(f"  SKIP ({status}): {event['home_team']} vs {event['away_team']}")
             continue
+
+        # Verificar que la fecha del partido en hora Leon corresponde a target_date
+        ts = event.get('start_timestamp')
+        if ts:
+            event_date_leon = datetime.fromtimestamp(ts, tz=LEON_TZ).strftime('%Y-%m-%d')
+            if event_date_leon != target_date:
+                print(f"  SKIP (fecha Leon={event_date_leon}, target={target_date}): "
+                      f"{event['home_team']} vs {event['away_team']}")
+                continue
+
         upcoming.append(event)
 
     if not upcoming:
-        print(f"Encontrados {len(events)} partidos de copa, pero todos ya terminaron/empezaron.")
+        print(f"Encontrados {len(all_events)} partidos de copa, pero ninguno aplica para {target_date} en hora Leon.")
         return []
 
     print(f"Encontrados {len(upcoming)} partidos de copa por jugar. Obteniendo cuotas...")
@@ -120,8 +150,8 @@ def send_bank_request(matches, target_date):
 
 
 def get_today_date():
-    """Retorna la fecha de hoy en formato YYYY-MM-DD (UTC)."""
-    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    """Retorna la fecha de hoy en formato YYYY-MM-DD (hora Leon GTO)."""
+    return datetime.now(LEON_TZ).strftime('%Y-%m-%d')
 
 
 def get_target_date():
