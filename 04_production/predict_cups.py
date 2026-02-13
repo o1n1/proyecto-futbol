@@ -60,7 +60,7 @@ def find_cup_matches(target_date):
     upcoming = []
     for event in all_events:
         status = event.get('status_type', '')
-        if status in ('finished', 'inprogress', 'canceled', 'postponed'):
+        if status in ('finished', 'canceled', 'postponed'):
             print(f"  SKIP ({status}): {event['home_team']} vs {event['away_team']}")
             continue
 
