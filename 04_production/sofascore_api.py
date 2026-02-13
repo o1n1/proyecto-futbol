@@ -35,13 +35,13 @@ def _request(endpoint, retries=3):
             if resp.status_code == 200:
                 return resp.json()
             print(f"[API] {url} -> status {resp.status_code}")
+            print(f"[API] Response headers: {dict(resp.headers)}")
+            print(f"[API] Response body: {resp.text[:1000]}")
             if resp.status_code == 429:
                 time.sleep(60)
                 continue
             if resp.status_code == 404:
                 return None
-            # Log response body for debugging
-            print(f"[API] Response: {resp.text[:500]}")
         except requests.RequestException as e:
             print(f"[API] {url} -> exception: {e}")
         time.sleep(2 ** attempt)
