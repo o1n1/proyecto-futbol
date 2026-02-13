@@ -1,18 +1,20 @@
 """
 Funciones para consultar la API de SofaScore.
+Usa curl_cffi para simular TLS fingerprint de Chrome (evita bloqueo por IP/TLS).
+Fallback a subprocess curl si curl_cffi no esta disponible.
 """
 
 import time
-import requests
-import urllib3
+import json
+import subprocess
 from pathlib import Path
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Importar config relativo al script
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from config import SOFASCORE_BASE_URL, SOFASCORE_HEADERS, COPAS_EUROPEAS, COPA_ALIASES
+from config import COPAS_EUROPEAS, COPA_ALIASES
+
+SOFASCORE_API = 'https://api.sofascore.com/api/v1'
 
 
 def frac_to_decimal(frac_str):
@@ -27,24 +29,62 @@ def frac_to_decimal(frac_str):
 
 
 def _request(endpoint, retries=3):
-    """Hace un GET a la API de SofaScore con reintentos."""
-    url = f"{SOFASCORE_BASE_URL}{endpoint}"
+    """Hace un GET a la API de SofaScore. Intenta curl_cffi, luego curl subprocess."""
+    url = f"{SOFASCORE_API}{endpoint}"
+
+    # Intentar con curl_cffi (simula TLS de Chrome)
+    try:
+        from curl_cffi import requests as cffi_requests
+        for attempt in range(retries):
+            try:
+                resp = cffi_requests.get(url, impersonate="chrome", timeout=30)
+                if resp.status_code == 200:
+                    return resp.json()
+                print(f"[curl_cffi] {url} -> status {resp.status_code}")
+                if resp.status_code == 429:
+                    time.sleep(60)
+                    continue
+                if resp.status_code in (403, 404):
+                    break
+            except Exception as e:
+                print(f"[curl_cffi] {url} -> exception: {e}")
+            time.sleep(2 ** attempt)
+    except ImportError:
+        pass
+
+    # Fallback: subprocess curl con headers de Chrome
+    print(f"[API] Trying subprocess curl for {endpoint}")
     for attempt in range(retries):
         try:
-            resp = requests.get(url, headers=SOFASCORE_HEADERS, timeout=30)
-            if resp.status_code == 200:
-                return resp.json()
-            print(f"[API] {url} -> status {resp.status_code}")
-            print(f"[API] Response headers: {dict(resp.headers)}")
-            print(f"[API] Response body: {resp.text[:1000]}")
-            if resp.status_code == 429:
+            result = subprocess.run([
+                'curl', '-s', '-w', '\\n%{http_code}',
+                '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                '-H', 'Accept: application/json',
+                '-H', 'Accept-Language: en-US,en;q=0.9',
+                '-H', 'Referer: https://www.sofascore.com/',
+                '-H', 'Origin: https://www.sofascore.com',
+                '--compressed',
+                url
+            ], capture_output=True, text=True, timeout=30)
+
+            output = result.stdout.strip()
+            lines = output.rsplit('\n', 1)
+            body = lines[0] if len(lines) > 1 else output
+            status = int(lines[-1]) if len(lines) > 1 else 0
+
+            if status == 200:
+                return json.loads(body)
+            print(f"[curl] {url} -> status {status}")
+            print(f"[curl] Response: {body[:500]}")
+            if status == 429:
                 time.sleep(60)
                 continue
-            if resp.status_code == 404:
+            if status in (403, 404):
                 return None
-        except requests.RequestException as e:
-            print(f"[API] {url} -> exception: {e}")
+        except Exception as e:
+            print(f"[curl] {url} -> exception: {e}")
         time.sleep(2 ** attempt)
+
     return None
 
 
