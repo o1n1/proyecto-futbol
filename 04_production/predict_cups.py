@@ -35,10 +35,24 @@ def find_cup_matches(target_date):
         print("No se encontraron partidos de copa.")
         return []
 
-    print(f"Encontrados {len(events)} partidos de copa. Obteniendo cuotas...")
+    # Filtrar solo partidos que no han empezado
+    # SofaScore puede incluir partidos del dia anterior por diferencia de zonas horarias
+    upcoming = []
+    for event in events:
+        status = event.get('status_type', '')
+        if status in ('finished', 'inprogress', 'canceled', 'postponed'):
+            print(f"  SKIP ({status}): {event['home_team']} vs {event['away_team']}")
+            continue
+        upcoming.append(event)
+
+    if not upcoming:
+        print(f"Encontrados {len(events)} partidos de copa, pero todos ya terminaron/empezaron.")
+        return []
+
+    print(f"Encontrados {len(upcoming)} partidos de copa por jugar. Obteniendo cuotas...")
 
     matches = []
-    for event in events:
+    for event in upcoming:
         odds = get_over25_odds(event['event_id'])
         if odds and odds.get('over_current'):
             event['odds_over25'] = odds['over_current']
