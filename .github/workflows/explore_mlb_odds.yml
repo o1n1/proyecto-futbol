@@ -1,0 +1,222 @@
+name: Explore MLB Odds Deep
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample_date:
+        description: 'Date to explore'
+        required: false
+        default: '2024-08-15'
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install curl_cffi
+
+      - name: Deep odds exploration
+        run: |
+          python << 'PYEOF'
+          import json, time
+          from curl_cffi import requests as cffi_requests
+
+          BASE = "https://api.sofascore.com/api/v1"
+          DATE = "${{ github.event.inputs.sample_date }}"
+
+          def get(url):
+              for _ in range(2):
+                  try:
+                      r = cffi_requests.get(url, impersonate='chrome120', timeout=15)
+                      if r.status_code == 200:
+                          return r.json()
+                      elif r.status_code != 404:
+                          print(f"  HTTP {r.status_code}: {url}")
+                  except Exception as e:
+                      print(f"  Error: {e}")
+                  time.sleep(0.5)
+              return None
+
+          # 1. Get MLB events
+          print("=" * 80)
+          print(f"FINDING MLB EVENTS FOR {DATE}")
+          print("=" * 80)
+
+          data = get(f"{BASE}/sport/baseball/scheduled-events/{DATE}")
+          mlb_events = []
+          for e in data.get('events', []):
+              t = e.get('tournament', {}).get('uniqueTournament', {}).get('name', '')
+              if 'MLB' in t and e.get('status', {}).get('type') == 'finished':
+                  mlb_events.append(e)
+
+          print(f"Found {len(mlb_events)} MLB finished events")
+          if not mlb_events:
+              print("No MLB events found!")
+              exit(0)
+
+          # Use first 2 events
+          for evt in mlb_events[:2]:
+              eid = evt['id']
+              home = evt.get('homeTeam', {}).get('name', '?')
+              away = evt.get('awayTeam', {}).get('name', '?')
+              print(f"\n{'='*80}")
+              print(f"EVENT: {away} @ {home} [id={eid}]")
+              print(f"{'='*80}")
+
+              # 2. Try ALL possible odds endpoints
+              print(f"\n--- ODDS ENDPOINTS ---")
+
+              # Provider 1 (default)
+              endpoints_to_try = [
+                  (f"/event/{eid}/odds/1/all", "Provider 1 - All markets"),
+                  (f"/event/{eid}/odds/1/all?providers=1", "Provider 1 explicit"),
+                  (f"/event/{eid}/odds/2/all", "Provider 2 - All markets"),
+                  (f"/event/{eid}/odds/3/all", "Provider 3 - All markets"),
+                  (f"/event/{eid}/odds/4/all", "Provider 4 - All markets"),
+                  (f"/event/{eid}/odds/5/all", "Provider 5 - All markets"),
+                  (f"/event/{eid}/provider1/markets", "Provider 1 markets list"),
+                  (f"/event/{eid}/odds", "Base odds endpoint"),
+                  (f"/event/{eid}/pregame-form", "Pregame form"),
+                  (f"/event/{eid}/best-odds", "Best odds"),
+                  (f"/event/{eid}/best-odds/1", "Best odds provider 1"),
+                  (f"/event/{eid}/h2h", "Head to head"),
+                  (f"/event/{eid}/h2h/events", "H2H events"),
+                  (f"/event/{eid}/graph", "Event graph"),
+                  (f"/event/{eid}/managers", "Managers"),
+                  (f"/event/{eid}/highlights", "Highlights"),
+                  (f"/event/{eid}/standings/home", "Home standings"),
+                  (f"/event/{eid}/votes", "Votes"),
+                  (f"/event/{eid}/best-players", "Best players"),
+              ]
+
+              for url_path, desc in endpoints_to_try:
+                  url = f"{BASE}{url_path}"
+                  result = get(url)
+                  if result:
+                      # Summarize what we got
+                      keys = list(result.keys()) if isinstance(result, dict) else f"[list: {len(result)} items]"
+                      size = len(json.dumps(result))
+
+                      if 'markets' in str(result):
+                          markets = result.get('markets', [])
+                          market_names = [f"{m.get('marketId')}:{m.get('marketName','?')}" for m in markets]
+                          print(f"  OK  {desc}: {len(markets)} markets -> {market_names}")
+                      else:
+                          print(f"  OK  {desc}: keys={keys} ({size} bytes)")
+                  else:
+                      print(f"  404 {desc}")
+                  time.sleep(0.2)
+
+              # 3. Explore the /odds/{provider_id}/all more carefully
+              print(f"\n--- DETAILED ODDS ANALYSIS (Provider 1) ---")
+              odds = get(f"{BASE}/event/{eid}/odds/1/all")
+              if odds:
+                  print(f"  Top-level keys: {list(odds.keys())}")
+                  markets = odds.get('markets', [])
+                  print(f"  Total markets: {len(markets)}")
+                  for m in markets:
+                      mid = m.get('marketId')
+                      mname = m.get('marketName', '?')
+                      mgroup = m.get('choiceGroup', '')
+                      mperiod = m.get('marketPeriod', '')
+                      choices = m.get('choices', [])
+                      choices_detail = []
+                      for c in choices:
+                          choices_detail.append({
+                              'name': c.get('name'),
+                              'initial': c.get('initialFractionalValue'),
+                              'final': c.get('fractionalValue'),
+                              'winning': c.get('winning'),
+                              'change': c.get('change'),
+                          })
+                      print(f"  Market {mid}: {mname} (group={mgroup}, period={mperiod})")
+                      for cd in choices_detail:
+                          print(f"    {cd['name']}: open={cd['initial']} close={cd['final']} winning={cd['winning']}")
+
+              # 4. Check odds on the DATE endpoint (bulk)
+              print(f"\n--- BULK ODDS ENDPOINTS (by date) ---")
+              bulk_endpoints = [
+                  (f"/sport/baseball/odds/1/{DATE}", "Baseball odds by date (provider 1)"),
+                  (f"/sport/baseball/odds/2/{DATE}", "Baseball odds by date (provider 2)"),
+                  (f"/sport/baseball/odds/{DATE}", "Baseball odds by date (no provider)"),
+              ]
+              for url_path, desc in bulk_endpoints:
+                  url = f"{BASE}{url_path}"
+                  result = get(url)
+                  if result:
+                      events_with_odds = result.get('events', result.get('odds', []))
+                      if isinstance(events_with_odds, list):
+                          print(f"  OK  {desc}: {len(events_with_odds)} items")
+                          if events_with_odds:
+                              first = events_with_odds[0]
+                              print(f"       First item keys: {list(first.keys()) if isinstance(first, dict) else type(first)}")
+                              print(f"       Sample: {json.dumps(first, ensure_ascii=False)[:300]}")
+                      else:
+                          print(f"  OK  {desc}: keys={list(result.keys())}")
+                  else:
+                      print(f"  404 {desc}")
+                  time.sleep(0.3)
+
+              # 5. Check SofaScore web-facing endpoints
+              print(f"\n--- SOFASCORE WEB ENDPOINTS ---")
+              web_endpoints = [
+                  (f"/event/{eid}/odds/1/changes/1", "Odds changes market 1"),
+                  (f"/event/{eid}/odds/1/changes/9", "Odds changes market 9 (O/U)"),
+                  (f"/event/{eid}/odds/1/changes/5", "Odds changes market 5 (BTTS)"),
+                  (f"/event/{eid}/odds/1/changes/17", "Odds changes market 17 (handicap)"),
+                  (f"/event/{eid}/odds/1/changes/101", "Odds changes market 101 (run line?)"),
+                  (f"/event/{eid}/odds/1/changes/601", "Odds changes market 601"),
+                  (f"/event/{eid}/odds/1/changes/60", "Odds changes market 60"),
+                  (f"/event/{eid}/odds/1/changes/3", "Odds changes market 3 (1st half/inning?)"),
+              ]
+              for url_path, desc in web_endpoints:
+                  url = f"{BASE}{url_path}"
+                  result = get(url)
+                  if result:
+                      odds_list = result.get('odds', [])
+                      if odds_list:
+                          # Show structure
+                          first = odds_list[0]
+                          print(f"  OK  {desc}: {len(odds_list)} entries")
+                          print(f"       Keys: {list(first.keys()) if isinstance(first, dict) else type(first)}")
+                      else:
+                          print(f"  OK  {desc}: empty (keys={list(result.keys())})")
+                  else:
+                      print(f"  404 {desc}")
+                  time.sleep(0.2)
+
+              # 6. Try unique-tournament endpoints for MLB
+              print(f"\n--- MLB TOURNAMENT INFO ---")
+              mlb_tid = 11205
+              t_endpoints = [
+                  (f"/unique-tournament/{mlb_tid}/seasons", "MLB Seasons"),
+                  (f"/unique-tournament/{mlb_tid}/media", "MLB Media"),
+              ]
+              for url_path, desc in t_endpoints:
+                  url = f"{BASE}{url_path}"
+                  result = get(url)
+                  if result:
+                      if 'seasons' in result:
+                          seasons = result['seasons']
+                          print(f"  OK  {desc}: {len(seasons)} seasons")
+                          for s in seasons[:10]:
+                              print(f"       {s.get('year','?')}: id={s.get('id','?')} name={s.get('name','?')}")
+                      else:
+                          print(f"  OK  {desc}: keys={list(result.keys())}")
+                  else:
+                      print(f"  404 {desc}")
+                  time.sleep(0.2)
+
+          print(f"\n{'='*80}")
+          print("EXPLORATION COMPLETE")
+          print(f"{'='*80}")
+          PYEOF
