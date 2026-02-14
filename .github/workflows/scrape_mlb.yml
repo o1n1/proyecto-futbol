@@ -12,7 +12,7 @@ on:
         required: false
         default: '5000'
       months:
-        description: 'Months to scrape (comma-separated, empty=all year)'
+        description: 'Months to scrape (comma-separated, empty=all baseball season)'
         required: false
         default: '2,3,4,5,6,7,8,9,10,11'
 
@@ -146,7 +146,6 @@ jobs:
                               status = evt.get('status', {}).get('type', '')
                               eid = evt.get('id')
                               if status == 'finished' and eid:
-                                  # Store event metadata
                                   tournament = evt.get('tournament', {}).get('uniqueTournament', {}).get('name', '')
                                   all_events[eid] = {
                                       'date': date_str,
@@ -173,6 +172,7 @@ jobs:
               return all_events, False
 
           def scrape_event(event_id, meta):
+              """Scrape a single baseball event: odds, statistics, lineups, event detail."""
               result = {
                   'event_id': event_id,
                   'scraped_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
@@ -181,13 +181,14 @@ jobs:
                   'home': meta.get('home', ''),
                   'away': meta.get('away', ''),
                   'odds': None, 'statistics': None,
-                  'lineups': None, 'incidents': None, 'blocked': False
+                  'lineups': None, 'event_detail': None, 'blocked': False
               }
+              # No incidents for baseball (404), but we add event_detail for inning scores
               endpoints = {
                   'odds': f'{BASE_URL}/event/{event_id}/odds/1/all',
                   'statistics': f'{BASE_URL}/event/{event_id}/statistics',
                   'lineups': f'{BASE_URL}/event/{event_id}/lineups',
-                  'incidents': f'{BASE_URL}/event/{event_id}/incidents',
+                  'event_detail': f'{BASE_URL}/event/{event_id}',
               }
               blocked = 0
               with ThreadPoolExecutor(max_workers=4) as ex:
@@ -199,7 +200,11 @@ jobs:
                           if data and isinstance(data, dict) and data.get('__blocked__'):
                               blocked += 1
                           else:
-                              result[name] = data
+                              if name == 'event_detail' and data:
+                                  # Unwrap: API returns {"event": {...}}
+                                  result[name] = data.get('event', data)
+                              else:
+                                  result[name] = data
                       except:
                           pass
               if blocked >= 2:
@@ -214,7 +219,7 @@ jobs:
               completed = set()
               cp = {'year': year, 'sport': SPORT, 'completed_events': [],
                     'total_processed': 0, 'total_odds': 0, 'total_stats': 0,
-                    'total_lineups': 0, 'total_incidents': 0}
+                    'total_lineups': 0}
               if checkpoint_file.exists():
                   with open(checkpoint_file) as f:
                       cp = json.load(f)
@@ -265,8 +270,6 @@ jobs:
                                   cp['total_stats'] += 1
                               if result.get('lineups') and isinstance(result['lineups'], dict):
                                   cp['total_lineups'] += 1
-                              if result.get('incidents') and isinstance(result['incidents'], dict) and result['incidents'].get('incidents'):
-                                  cp['total_incidents'] += 1
                           except Exception as e:
                               logger.error(f"Error {eid}: {e}")
 
