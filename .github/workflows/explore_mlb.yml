@@ -1,0 +1,265 @@
+name: Explore MLB Data (SofaScore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample_date:
+        description: 'Date to explore (YYYY-MM-DD)'
+        required: false
+        default: '2024-08-15'
+      max_events:
+        description: 'Max events to explore in detail'
+        required: false
+        default: '5'
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install curl_cffi
+
+      - name: Explore baseball endpoints
+        run: |
+          python << 'PYEOF'
+          import json, time, sys
+          from curl_cffi import requests as cffi_requests
+          from datetime import date, timedelta
+
+          BASE_URL = "https://api.sofascore.com/api/v1"
+          SAMPLE_DATE = "${{ github.event.inputs.sample_date }}"
+          MAX_EVENTS = int("${{ github.event.inputs.max_events }}" or "5")
+
+          def http_get(url):
+              for _ in range(2):
+                  try:
+                      r = cffi_requests.get(url, impersonate='chrome120', timeout=15)
+                      if r.status_code == 200:
+                          return r.json()
+                      print(f"  HTTP {r.status_code}: {r.text[:200]}")
+                  except Exception as e:
+                      print(f"  Error: {e}")
+                  time.sleep(1)
+              return None
+
+          # ============================================================
+          # 1. SCHEDULED EVENTS - Todos los partidos de un día
+          # ============================================================
+          print("=" * 80)
+          print(f"1. SCHEDULED EVENTS: /sport/baseball/scheduled-events/{SAMPLE_DATE}")
+          print("=" * 80)
+
+          data = http_get(f"{BASE_URL}/sport/baseball/scheduled-events/{SAMPLE_DATE}")
+          if not data:
+              print("FAILED - No data returned")
+              sys.exit(1)
+
+          events = data.get('events', [])
+          print(f"\nTotal events: {len(events)}")
+
+          # Agrupar por torneo
+          tournaments = {}
+          for e in events:
+              t = e.get('tournament', {})
+              key = t.get('uniqueTournament', {}).get('name', 'Unknown')
+              tid = t.get('uniqueTournament', {}).get('id', '?')
+              cat = t.get('category', {}).get('name', '?')
+              if key not in tournaments:
+                  tournaments[key] = {'id': tid, 'category': cat, 'count': 0, 'events': []}
+              tournaments[key]['count'] += 1
+              tournaments[key]['events'].append(e)
+
+          print("\nTournaments found:")
+          for name, info in sorted(tournaments.items(), key=lambda x: -x[1]['count']):
+              print(f"  {info['count']:>3} | {name} ({info['category']}) [tournament_id={info['id']}]")
+
+          # Mostrar estructura de un evento
+          if events:
+              print("\n--- Sample event structure (keys) ---")
+              e = events[0]
+              print(json.dumps({k: type(v).__name__ for k, v in e.items()}, indent=2))
+              print("\n--- Sample event FULL ---")
+              print(json.dumps(e, indent=2, ensure_ascii=False))
+
+          # ============================================================
+          # 2. EXPLORAR MULTIPLES FECHAS para contar volumen
+          # ============================================================
+          print("\n" + "=" * 80)
+          print("2. VOLUME CHECK - Events per date (sample of dates)")
+          print("=" * 80)
+
+          test_dates = [
+              "2024-04-01", "2024-05-15", "2024-06-15",
+              "2024-07-15", "2024-08-15", "2024-09-15",
+              "2024-10-15", "2023-07-15", "2022-07-15",
+              "2021-07-15", "2020-08-15", "2019-07-15",
+          ]
+          for d in test_dates:
+              data = http_get(f"{BASE_URL}/sport/baseball/scheduled-events/{d}")
+              if data:
+                  evts = data.get('events', [])
+                  finished = sum(1 for e in evts if e.get('status', {}).get('type') == 'finished')
+                  print(f"  {d}: {len(evts):>3} total, {finished:>3} finished")
+              else:
+                  print(f"  {d}: FAILED")
+              time.sleep(0.2)
+
+          # ============================================================
+          # 3. DETAILED ENDPOINTS per event
+          # ============================================================
+          # Tomar MLB events finished
+          mlb_events = []
+          for e in events:
+              if (e.get('status', {}).get('type') == 'finished' and
+                  'MLB' in e.get('tournament', {}).get('uniqueTournament', {}).get('name', '')):
+                  mlb_events.append(e)
+
+          # Si no hay MLB, usar cualquier finished
+          if not mlb_events:
+              mlb_events = [e for e in events if e.get('status', {}).get('type') == 'finished']
+
+          sample_events = mlb_events[:MAX_EVENTS]
+          print(f"\n\n{'='*80}")
+          print(f"3. DETAILED ENDPOINTS - {len(sample_events)} sample events")
+          print(f"{'='*80}")
+
+          for i, evt in enumerate(sample_events):
+              eid = evt.get('id')
+              home = evt.get('homeTeam', {}).get('name', '?')
+              away = evt.get('awayTeam', {}).get('name', '?')
+              tournament = evt.get('tournament', {}).get('uniqueTournament', {}).get('name', '?')
+              print(f"\n{'─'*60}")
+              print(f"Event {i+1}: {away} @ {home} ({tournament}) [id={eid}]")
+              print(f"{'─'*60}")
+
+              # 3a. ODDS
+              print(f"\n  3a. ODDS: /event/{eid}/odds/1/all")
+              odds_data = http_get(f"{BASE_URL}/event/{eid}/odds/1/all")
+              if odds_data:
+                  markets = odds_data.get('markets', [])
+                  print(f"    Markets found: {len(markets)}")
+                  for m in markets:
+                      mid = m.get('marketId')
+                      mname = m.get('marketName')
+                      group = m.get('choiceGroup', '')
+                      choices = m.get('choices', [])
+                      choices_str = ', '.join([
+                          f"{c.get('name')}={c.get('fractionalValue','?')}"
+                          for c in choices
+                      ])
+                      print(f"    [{mid:>3}] {mname}{f' ({group})' if group else ''}: {choices_str}")
+
+                  # Full JSON of first market
+                  if markets:
+                      print(f"\n    --- Full first market ---")
+                      print(f"    {json.dumps(markets[0], indent=6, ensure_ascii=False)}")
+              else:
+                  print("    No odds data")
+
+              # 3b. STATISTICS
+              print(f"\n  3b. STATISTICS: /event/{eid}/statistics")
+              stats_data = http_get(f"{BASE_URL}/event/{eid}/statistics")
+              if stats_data:
+                  stats = stats_data.get('statistics', [])
+                  print(f"    Periods: {len(stats)}")
+                  for period in stats:
+                      pname = period.get('period', '?')
+                      groups = period.get('groups', [])
+                      print(f"    Period '{pname}': {len(groups)} groups")
+                      for g in groups:
+                          gname = g.get('groupName', '?')
+                          items = g.get('statisticsItems', [])
+                          print(f"      Group '{gname}': {len(items)} items")
+                          for item in items:
+                              name = item.get('name', '?')
+                              hval = item.get('homeValue', '?')
+                              aval = item.get('awayValue', '?')
+                              print(f"        {name}: home={hval}, away={aval}")
+              else:
+                  print("    No statistics data")
+
+              # 3c. LINEUPS
+              print(f"\n  3c. LINEUPS: /event/{eid}/lineups")
+              lineup_data = http_get(f"{BASE_URL}/event/{eid}/lineups")
+              if lineup_data:
+                  print(f"    Confirmed: {lineup_data.get('confirmed')}")
+                  for side in ['home', 'away']:
+                      team = lineup_data.get(side, {})
+                      players = team.get('players', [])
+                      subs = team.get('substitutes', [])
+                      formation = team.get('formation', 'N/A')
+                      print(f"    {side}: {len(players)} players, {len(subs)} subs, formation={formation}")
+                      # Show first 3 players
+                      for p in players[:3]:
+                          pdata = p.get('player', {})
+                          pos = p.get('position', '?')
+                          stats_keys = list(p.get('statistics', {}).keys())[:10]
+                          print(f"      {pdata.get('name','?')} ({pos}) stats_keys={stats_keys}")
+                      if players:
+                          # Full stats keys for first player
+                          first_stats = players[0].get('statistics', {})
+                          print(f"    All stat keys ({len(first_stats)}): {list(first_stats.keys())}")
+              else:
+                  print("    No lineup data")
+
+              # 3d. INCIDENTS
+              print(f"\n  3d. INCIDENTS: /event/{eid}/incidents")
+              inc_data = http_get(f"{BASE_URL}/event/{eid}/incidents")
+              if inc_data:
+                  incidents = inc_data.get('incidents', [])
+                  print(f"    Total incidents: {len(incidents)}")
+                  # Group by type
+                  types = {}
+                  for inc in incidents:
+                      t = inc.get('incidentType', '?')
+                      types[t] = types.get(t, 0) + 1
+                  for t, c in sorted(types.items(), key=lambda x: -x[1]):
+                      print(f"      {c:>3} | {t}")
+                  # Show first 5
+                  print(f"    First 5 incidents:")
+                  for inc in incidents[:5]:
+                      print(f"      {json.dumps(inc, ensure_ascii=False)[:200]}")
+              else:
+                  print("    No incidents data")
+
+              # 3e. EVENT DETAIL
+              print(f"\n  3e. EVENT DETAIL: /event/{eid}")
+              evt_data = http_get(f"{BASE_URL}/event/{eid}")
+              if evt_data:
+                  event_detail = evt_data.get('event', evt_data)
+                  print(f"    Keys: {list(event_detail.keys())}")
+                  # Score structure
+                  hs = event_detail.get('homeScore', {})
+                  as_ = event_detail.get('awayScore', {})
+                  print(f"    Home score keys: {list(hs.keys())}")
+                  print(f"    Home score: {json.dumps(hs)}")
+                  print(f"    Away score: {json.dumps(as_)}")
+                  # Venue
+                  venue = event_detail.get('venue', {})
+                  print(f"    Venue: {venue}")
+              else:
+                  print("    No event detail")
+
+              time.sleep(0.5)
+
+          print(f"\n\n{'='*80}")
+          print("EXPLORATION COMPLETE")
+          print(f"{'='*80}")
+          PYEOF
+
+      - name: Upload exploration results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlb-exploration
+          path: 05_mlb/
+          retention-days: 30
