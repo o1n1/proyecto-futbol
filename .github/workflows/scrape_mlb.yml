@@ -1,0 +1,416 @@
+name: Scrape MLB (SofaScore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: 'Years to scrape (comma-separated)'
+        required: true
+        default: '2024,2023,2022,2021,2020,2019'
+      max_events_per_run:
+        description: 'Max events before saving and relaunching'
+        required: false
+        default: '5000'
+      months:
+        description: 'Months to scrape (comma-separated, empty=all year)'
+        required: false
+        default: '2,3,4,5,6,7,8,9,10,11'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install curl_cffi
+
+      - name: Download previous checkpoints
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p 05_mlb/data
+          ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '[.artifacts[] | select(.name | startswith("mlb-checkpoints-")) | select(.expired == false)] | sort_by(.created_at) | last | .id' 2>/dev/null)
+
+          if [ -n "$ARTIFACT_ID" ] && [ "$ARTIFACT_ID" != "null" ]; then
+            echo "Downloading checkpoints from artifact $ARTIFACT_ID"
+            gh api repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip > /tmp/checkpoints.zip 2>/dev/null
+            unzip -o /tmp/checkpoints.zip -d 05_mlb/data/ 2>/dev/null || true
+            echo "Checkpoints downloaded:"
+            ls -la 05_mlb/data/checkpoint_*.json 2>/dev/null || echo "  None found"
+          else
+            echo "No previous checkpoints found"
+          fi
+
+      - name: Show IP
+        run: curl -s ifconfig.me && echo ""
+
+      - name: Scrape MLB data
+        id: scrape
+        run: |
+          mkdir -p 05_mlb/data/raw
+
+          python << 'PYEOF'
+          import os, sys, json, time, logging
+          from pathlib import Path
+          from datetime import date, timedelta
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+
+          from curl_cffi import requests as cffi_requests
+
+          logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+          logger = logging.getLogger(__name__)
+
+          YEARS_STR = "${{ github.event.inputs.years }}"
+          MAX_PER_RUN = int("${{ github.event.inputs.max_events_per_run }}" or "5000")
+          MONTHS_STR = "${{ github.event.inputs.months }}"
+          BASE_URL = "https://api.sofascore.com/api/v1"
+          SPORT = "baseball"
+          MAX_WORKERS = 40
+          BATCH_SIZE = 200
+          TIMEOUT = 15
+          IMPERSONATIONS = ["chrome110", "chrome116", "chrome120", "chrome123", "chrome124", "chrome131"]
+          DATA_DIR = Path("05_mlb/data")
+          GLOBAL_STATUS_FILE = DATA_DIR / "global_status.json"
+
+          YEARS = [int(y.strip()) for y in YEARS_STR.split(',') if y.strip()]
+          MONTHS = [int(m.strip()) for m in MONTHS_STR.split(',') if m.strip()] if MONTHS_STR.strip() else list(range(1, 13))
+          logger.info(f"Years: {YEARS}, Months: {MONTHS}, Max per run: {MAX_PER_RUN}")
+
+          _imp_counter = 0
+          def get_imp():
+              global _imp_counter
+              imp = IMPERSONATIONS[_imp_counter % len(IMPERSONATIONS)]
+              _imp_counter += 1
+              return imp
+
+          def http_get(url):
+              for attempt in range(2):
+                  try:
+                      r = cffi_requests.get(url, impersonate=get_imp(), timeout=TIMEOUT)
+                      if r.status_code == 200:
+                          return r.json()
+                      elif r.status_code == 404:
+                          return None
+                      elif r.status_code in (403, 429):
+                          return {'__blocked__': True}
+                  except:
+                      pass
+                  time.sleep(0.5)
+              return None
+
+          def discover_events(year, months):
+              """Discover all finished baseball events for given year+months."""
+              logger.info(f"Discovering {SPORT} events for {year} (months: {months})...")
+              all_events = {}
+              consecutive_blocks = 0
+
+              for month in months:
+                  start_date = date(year, month, 1)
+                  if month == 12:
+                      end_date = date(year, 12, 31)
+                  else:
+                      end_date = date(year, month + 1, 1) - timedelta(days=1)
+                  end_date = min(end_date, date.today() - timedelta(days=1))
+                  if start_date > date.today():
+                      continue
+
+                  current = start_date
+                  while current <= end_date:
+                      date_str = current.strftime("%Y-%m-%d")
+                      url = f"{BASE_URL}/sport/{SPORT}/scheduled-events/{date_str}"
+                      data = http_get(url)
+
+                      if data and data.get('__blocked__'):
+                          consecutive_blocks += 1
+                          if consecutive_blocks >= 3:
+                              logger.warning(f"  3 consecutive blocks at {date_str}")
+                              return all_events, True
+                          logger.warning(f"  Blocked at {date_str}, waiting 30s...")
+                          time.sleep(30)
+                          continue
+
+                      consecutive_blocks = 0
+                      if data:
+                          events = data.get('events', [])
+                          for evt in events:
+                              status = evt.get('status', {}).get('type', '')
+                              eid = evt.get('id')
+                              if status == 'finished' and eid:
+                                  # Store event metadata
+                                  tournament = evt.get('tournament', {}).get('uniqueTournament', {}).get('name', '')
+                                  all_events[eid] = {
+                                      'date': date_str,
+                                      'tournament': tournament,
+                                      'home': evt.get('homeTeam', {}).get('name', ''),
+                                      'away': evt.get('awayTeam', {}).get('name', ''),
+                                  }
+
+                      current += timedelta(days=1)
+                      time.sleep(0.05)
+
+                  logger.info(f"  Month {year}-{month:02d}: {len(all_events)} total events so far")
+
+              logger.info(f"  Total {SPORT} events {year}: {len(all_events)}")
+
+              # Log tournament breakdown
+              tournaments = {}
+              for eid, meta in all_events.items():
+                  t = meta['tournament']
+                  tournaments[t] = tournaments.get(t, 0) + 1
+              for t, c in sorted(tournaments.items(), key=lambda x: -x[1]):
+                  logger.info(f"    {c:>5} | {t}")
+
+              return all_events, False
+
+          def scrape_event(event_id, meta):
+              result = {
+                  'event_id': event_id,
+                  'scraped_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                  'sport': SPORT,
+                  'tournament': meta.get('tournament', ''),
+                  'home': meta.get('home', ''),
+                  'away': meta.get('away', ''),
+                  'odds': None, 'statistics': None,
+                  'lineups': None, 'incidents': None, 'blocked': False
+              }
+              endpoints = {
+                  'odds': f'{BASE_URL}/event/{event_id}/odds/1/all',
+                  'statistics': f'{BASE_URL}/event/{event_id}/statistics',
+                  'lineups': f'{BASE_URL}/event/{event_id}/lineups',
+                  'incidents': f'{BASE_URL}/event/{event_id}/incidents',
+              }
+              blocked = 0
+              with ThreadPoolExecutor(max_workers=4) as ex:
+                  futs = {ex.submit(http_get, url): name for name, url in endpoints.items()}
+                  for f in as_completed(futs):
+                      name = futs[f]
+                      try:
+                          data = f.result()
+                          if data and isinstance(data, dict) and data.get('__blocked__'):
+                              blocked += 1
+                          else:
+                              result[name] = data
+                      except:
+                          pass
+              if blocked >= 2:
+                  result['blocked'] = True
+              return result
+
+          def scrape_year(year, max_events):
+              raw_dir = DATA_DIR / "raw" / str(year)
+              raw_dir.mkdir(parents=True, exist_ok=True)
+              checkpoint_file = DATA_DIR / f"checkpoint_{year}.json"
+
+              completed = set()
+              cp = {'year': year, 'sport': SPORT, 'completed_events': [],
+                    'total_processed': 0, 'total_odds': 0, 'total_stats': 0,
+                    'total_lineups': 0, 'total_incidents': 0}
+              if checkpoint_file.exists():
+                  with open(checkpoint_file) as f:
+                      cp = json.load(f)
+                  completed = set(cp.get('completed_events', []))
+                  logger.info(f"  Checkpoint {year}: {len(completed)} already done")
+
+              all_events, discovery_blocked = discover_events(year, MONTHS)
+              if discovery_blocked and len(all_events) == 0:
+                  return 0, True, False
+
+              pending = [(eid, meta) for eid, meta in all_events.items() if eid not in completed]
+              pending.sort(key=lambda x: x[1]['date'], reverse=True)
+
+              if not pending:
+                  logger.info(f"  Year {year}: all {len(completed)} events already done!")
+                  return 0, False, True
+
+              pending = pending[:max_events]
+              logger.info(f"  Year {year}: {len(pending)} pending (of {len(all_events)} total, {len(completed)} done)")
+
+              total = len(pending)
+              i = 0
+              start_time = time.time()
+              was_blocked = False
+              consecutive_block_batches = 0
+
+              while i < total:
+                  batch = pending[i:i+BATCH_SIZE]
+                  blocked_count = 0
+
+                  with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                      futs = {executor.submit(scrape_event, eid, meta): (eid, meta) for eid, meta in batch}
+                      for f in as_completed(futs):
+                          eid, meta = futs[f]
+                          try:
+                              result = f.result()
+                              if result['blocked']:
+                                  blocked_count += 1
+                                  continue
+                              filepath = raw_dir / f"{meta['date']}_{eid}.json"
+                              with open(filepath, 'w') as fp:
+                                  json.dump(result, fp, ensure_ascii=False)
+                              completed.add(eid)
+                              cp['total_processed'] += 1
+                              if result.get('odds') and isinstance(result['odds'], dict) and result['odds'].get('markets'):
+                                  cp['total_odds'] += 1
+                              if result.get('statistics') and isinstance(result['statistics'], dict):
+                                  cp['total_stats'] += 1
+                              if result.get('lineups') and isinstance(result['lineups'], dict):
+                                  cp['total_lineups'] += 1
+                              if result.get('incidents') and isinstance(result['incidents'], dict) and result['incidents'].get('incidents'):
+                                  cp['total_incidents'] += 1
+                          except Exception as e:
+                              logger.error(f"Error {eid}: {e}")
+
+                  cp['completed_events'] = list(completed)
+                  with open(checkpoint_file, 'w') as f:
+                      json.dump(cp, f)
+
+                  if blocked_count > len(batch) * 0.5:
+                      consecutive_block_batches += 1
+                      if consecutive_block_batches >= 2:
+                          logger.warning(f"  BLOCKED 2x consecutive! Stopping year {year}")
+                          was_blocked = True
+                          break
+                      logger.warning(f"  Blocked batch ({blocked_count}/{len(batch)}), waiting 60s...")
+                      time.sleep(60)
+                      continue
+                  else:
+                      consecutive_block_batches = 0
+
+                  i += BATCH_SIZE
+                  elapsed = time.time() - start_time
+                  rate = cp['total_processed'] / max(elapsed, 1)
+                  logger.info(
+                      f"  [{year}] [{min(i,total)}/{total}] Done: {cp['total_processed']} | "
+                      f"Odds: {cp['total_odds']} | Stats: {cp['total_stats']} | "
+                      f"{rate:.1f} evt/s"
+                  )
+
+              elapsed_min = (time.time() - start_time) / 60
+              all_done = (len(completed) >= len(all_events))
+              logger.info(f"  Year {year} finished in {elapsed_min:.1f} min | "
+                         f"Processed: {cp['total_processed']} | Total done: {len(completed)}/{len(all_events)} | "
+                         f"Blocked: {was_blocked}")
+              return cp['total_processed'], was_blocked, all_done
+
+          # ============================================================
+          # MAIN
+          # ============================================================
+          global_processed = 0
+          blocked_at_year = None
+          years_done = []
+          years_pending = []
+
+          for year in YEARS:
+              logger.info(f"\n{'='*60}")
+              logger.info(f"PROCESSING {SPORT.upper()} YEAR {year}")
+              logger.info(f"{'='*60}")
+
+              processed, blocked, year_done = scrape_year(year, MAX_PER_RUN)
+              global_processed += processed
+
+              if year_done:
+                  years_done.append(year)
+              else:
+                  years_pending.append(year)
+
+              if blocked:
+                  blocked_at_year = year
+                  idx = YEARS.index(year)
+                  for remaining_year in YEARS[idx+1:]:
+                      years_pending.append(remaining_year)
+                  logger.warning(f"\nBLOCKED at year {year}!")
+                  break
+
+          status = {
+              'sport': SPORT,
+              'years_done': years_done,
+              'years_pending': years_pending,
+              'blocked_at_year': blocked_at_year,
+              'total_processed_this_run': global_processed,
+              'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
+              'needs_relaunch': len(years_pending) > 0
+          }
+          with open(GLOBAL_STATUS_FILE, 'w') as f:
+              json.dump(status, f, indent=2)
+
+          logger.info(f"\n{'='*60}")
+          logger.info(f"RUN COMPLETE")
+          logger.info(f"  Years done: {years_done}")
+          logger.info(f"  Years pending: {years_pending}")
+          logger.info(f"  Total processed: {global_processed}")
+          logger.info(f"{'='*60}")
+          PYEOF
+
+      - name: Show results
+        if: always()
+        run: |
+          echo "=== MLB RESULTS ==="
+          for year in $(echo "${{ github.event.inputs.years }}" | tr ',' ' '); do
+            count=$(find "05_mlb/data/raw/$year/" -name "*.json" 2>/dev/null | wc -l)
+            echo "  Year $year: $count JSONs"
+            if [ -f "05_mlb/data/checkpoint_${year}.json" ]; then
+              python -c "
+          import json
+          d=json.load(open('05_mlb/data/checkpoint_${year}.json'))
+          print(f'    Checkpoint: {len(d.get(\"completed_events\",[]))} done, odds={d.get(\"total_odds\",0)}, stats={d.get(\"total_stats\",0)}')
+          " 2>/dev/null
+            fi
+          done
+          echo ""
+          cat 05_mlb/data/global_status.json 2>/dev/null || echo "No status file"
+
+      - name: Upload raw JSONs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlb-raw-jsons-${{ github.run_number }}
+          path: 05_mlb/data/raw/
+          retention-days: 30
+          compression-level: 9
+
+      - name: Upload checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlb-checkpoints-${{ github.run_number }}
+          path: 05_mlb/data/checkpoint_*.json
+          retention-days: 90
+
+      - name: Upload status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlb-status-${{ github.run_number }}
+          path: 05_mlb/data/global_status.json
+          retention-days: 90
+
+      - name: Auto-relaunch if needed
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f "05_mlb/data/global_status.json" ]; then
+            NEEDS=$(python -c "import json; d=json.load(open('05_mlb/data/global_status.json')); print(d.get('needs_relaunch', False))")
+            PENDING=$(python -c "import json; d=json.load(open('05_mlb/data/global_status.json')); print(','.join(str(y) for y in d.get('years_pending', [])))")
+
+            if [ "$NEEDS" = "True" ] && [ -n "$PENDING" ]; then
+              echo "Relaunching with pending years: $PENDING"
+              gh workflow run scrape_mlb.yml \
+                -f years="$PENDING" \
+                -f max_events_per_run="${{ github.event.inputs.max_events_per_run }}" \
+                -f months="${{ github.event.inputs.months }}"
+              echo "Relaunch triggered!"
+            else
+              echo "All years complete! No relaunch needed."
+            fi
+          fi
